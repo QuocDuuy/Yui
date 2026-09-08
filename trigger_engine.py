@@ -9,6 +9,7 @@ Mục đích: chạy nền liên tục, kiểm tra định kỳ:
 import time
 import logging
 from datetime import datetime, timedelta
+import random
 
 # Chặn log cảnh báo thư viện mạng để terminal luôn sạch sẽ
 logging.getLogger("google_genai").setLevel(logging.WARNING)
@@ -25,9 +26,17 @@ ai_router = AIRouter()
 
 def call_ai(context: str) -> str:
     """Goi AIRouter cho mot su kien tu dong, co dinh kem lich su + facts."""
+    facts = memory.get_all_facts()
+    facts_hint = ""
+    if facts:
+        chosen_fact = random.choice(facts)
+        facts_hint = f" (Gợi ý thêm: Papa từng chia sẻ rằng '{chosen_fact}')."
+
+
+
     prompt_content = (
-        f"Day la mot su kien tu dong: '{context}'. "
-        f"Hay chu dong noi mot cau phu hop voi su kien nay."
+        f"Day la mot su kien tu dong: '{context}'.{facts_hint} "
+        f"Hay chu dong noi mot cau phu hop, an can va tu nhien voi su kien nay."
     )
 
     # Giảm limit xuống 3 để tránh việc Yui bị phân tâm bởi câu chuyện cũ

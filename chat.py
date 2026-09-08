@@ -16,7 +16,7 @@ from backend import memory
 
 ai_router = AIRouter()
 
-print("Yui da san sang. Go 'thoat' de dung, 'nho: ...' de luu 1 dieu can nho lau dai.\n")
+print("Yui da san sang. Go 'thoat' de dung.\n")
 
 while True:
     user_input = input("Ban: ").strip()
@@ -27,9 +27,12 @@ while True:
     if user_input.lower() == "thoat":
         break
 
-    # Tu dong bat va luu fact neu chua tu khoa (Khong can go 'nho:' nua)
-    if memory.check_and_extract_fact(user_input):
-        print(f"*(Yui da lang nghe va ghi nho vao ky uc)*")
+    # 1. kich hoat phan tich trich xuat fact chay ngam cho Yui (0 delay cho Yui)
+    memory.extract_fact_in_background(user_input, ai_router)
+
+    # # Tu dong bat va luu fact neu chua tu khoa (Khong can go 'nho:' nua)
+    # if memory.check_and_extract_fact(user_input):
+    #     print(f"*(Yui da lang nghe va ghi nho vao ky uc)*")
 
     # Tiep tuc luong hoi thoai binh thuong ma khong bi dung lai
     history = memory.get_recent_history(limit=20)

@@ -1,13 +1,8 @@
-"""
-Memory - luu tru don gian bang SQLite.
-Khong co scoring/consolidation tu dong - chi luu lich su hoi thoai gan day
-va cac "fact" nguoi dung chu dong yeu cau nho.
-"""
-
 import sqlite3
 from pathlib import Path
 from datetime import datetime
 from typing import List
+import threading
 
 from backend.router import MEMORY_KEYWORDS
 
@@ -133,6 +128,42 @@ def get_last_interaction_time() -> datetime | None:
             return None
     return None
 
+EXTRACTION_PROMPT = """Phan tich cau noi sau cua Papa. Neu cau noi tiet lo bat ky so thich, thoi quen, lich trinh, cong viec hoac trang thai suc khoe lau dai cua Papa, hay rut gon thanh 1 cau ngan gon ro rang (vi du: 'Papa thich uong cafe den', 'Papa hay bi moi mat vi may tinh').
+Neu day chi la cau chao hoi, cau hoi xa giao, hoi gio giac hoac tro chuyen thong thuong khong co thong tin ca nhan can nho dai han, chi tra ve dung chu: NONE.
 
+Cau noi cua Papa: "{user_text}"
+Ket qua:"""
+
+
+def _async_extract_fact(user_text: str, ai_router):
+    """Luong phu: Trich xuat fact chay ngam, khong lam cham luong chat chinh."""
+    try:
+        from .providers.base import ChatMessage
+        prompt = EXTRACTION_PROMPT.format(user_text=user_text)
+
+        # Dung che do simple (re, nhanh, nhe) de trich xuat
+        res = ai_router.generate_reply(
+            system_prompt="Ban la bo phan loai thong tin ngan gon. Chi tra ve 1 fact ngan hoac chu NONE.",
+            messages=[ChatMessage(role="user", content=prompt)],
+            mode="simple",
+        )
+        fact = res.get("reply", "").strip()
+
+        # Neu nhan dien duoc thong tin va khong phai NONE
+        if fact and "NONE" not in fact and len(fact) < 150:
+            if add_fact(fact):
+                print(f"\n*(Yui đã âm thầm ghi nhớ: {fact})*")
+    except Exception:
+        pass  # Luong phu khong duoc phep gay crash chuong trinh
+
+
+def extract_fact_in_background(user_text: str, ai_router):
+    """Kich hoat thread chay tach biet."""
+    thread = threading.Thread(
+        target=_async_extract_fact,
+        args=(user_text, ai_router),
+        daemon=True,
+    )
+    thread.start()
 
 init_db()
