@@ -1,0 +1,14 @@
+# Môi trường ảo
+venv/
+
+# Cấu hình chứa API Key
+.env
+
+# Cache & Bytecode
+__pycache__/
+*.pyc
+
+# Database SQLite cục bộ (Bắt buộc)
+*.db
+*.sqlite3
+yui.db
