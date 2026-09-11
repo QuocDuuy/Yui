@@ -41,7 +41,11 @@ class GeminiProvider(AIProvider):
         try:
             chat = self.client.chats.create(
                 model=self.model_name,
-                config=types.GenerateContentConfig(system_instruction=system_prompt),
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    temperature=0.85, 
+                    top_p=0.95
+                    ),
                 history=history,
             )
             response = chat.send_message(last_message)

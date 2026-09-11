@@ -1,10 +1,12 @@
+"""
+Memory - Quản lý Ký ức và Ngữ cảnh Động cho Yui.
+"""
+
 import sqlite3
+import threading
 from pathlib import Path
 from datetime import datetime
-from typing import List
-import threading
-
-from backend.router import MEMORY_KEYWORDS
+from typing import List, Optional
 
 from .providers.base import ChatMessage
 
@@ -53,7 +55,7 @@ def get_recent_history(limit: int = 20) -> List[ChatMessage]:
         (limit,),
     ).fetchall()
     conn.close()
-    rows.reverse()  # Tra ve theo thu tu thoi gian tang dan
+    rows.reverse()
     return [ChatMessage(role=r, content=c) for r, c in rows]
 
 
@@ -63,7 +65,6 @@ def add_fact(content: str) -> bool:
         return False
     conn = _get_connection()
     try:
-        # INSERT OR IGNORE de tranh trung lap noi dung y het
         conn.execute(
             "INSERT OR IGNORE INTO user_facts (content, created_at) VALUES (?, ?)",
             (content, datetime.now().isoformat()),
@@ -81,45 +82,52 @@ def get_all_facts() -> List[str]:
     return [r[0] for r in rows]
 
 
-def build_system_prompt_with_facts(base_persona: str) -> str:
-    # 1. Dong bo voi dinh dang prompt cua Yui 0 (Kem thu trong tuan)
-    now_str = datetime.now().strftime("%A, %d/%m/%Y %H:%M")
-    time_block = f"[THONG TIN THOI GIAN THUC]: {now_str}"
+def get_relevant_facts(query_text: Optional[str] = None, max_facts: int = 5) -> List[str]:
+    """
+    Lọc ký ức thông minh: Ưu tiên các facts có từ khóa liên quan đến câu chat hiện tại.
+    Nếu không có query hoặc ít liên quan, lấy các facts mới nhất để tránh làm loãng prompt.
+    """
+    all_facts = get_all_facts()
+    if not all_facts:
+        return []
+    
+    if not query_text:
+        return all_facts[-max_facts:]
 
-    # 2. Chen facts neu co
-    facts = get_all_facts()
+    q_lower = query_text.lower()
+    relevant = []
+    others = []
+
+    for fact in all_facts:
+        f_lower = fact.lower()
+        # Tìm từ khóa giao thoa giữa câu nói và fact
+        words = [w for w in f_lower.split() if len(w) > 2]
+        if any(w in q_lower for w in words):
+            relevant.append(fact)
+        else:
+            others.append(fact)
+
+    # Ghép facts có độ liên quan cao nhất lên đầu
+    selected = relevant + others
+    return selected[:max_facts]
+
+
+def build_system_prompt_with_facts(base_persona: str, current_query: Optional[str] = None) -> str:
+    now_str = datetime.now().strftime("%A, %d/%m/%Y %H:%M")
+    time_block = f"[THÔNG TIN THỜI GIAN THỰC]: {now_str}"
+
+    facts = get_relevant_facts(current_query)
     if facts:
         facts_list = "\n".join(f"- {f}" for f in facts)
-        facts_block = f"[THONG TIN DA BIET VE PAPA]:\n{facts_list}"
+        facts_block = f"[KÝ ỨC CỦA YUI VỀ PAPA (CHỌN LỌC ĐỘNG)]:\n{facts_list}"
         return f"{base_persona}\n\n{time_block}\n\n{facts_block}"
 
     return f"{base_persona}\n\n{time_block}"
 
-def check_and_extract_fact(text: str) -> bool:
-    """
-    Kiem tra neu cau noi chua tu khoa can ghi nho.
-    Neu co, tu dong luu ca cau vao bang user_facts.
-    """
-    text_clean = text.strip()
-    text_lower = text_clean.lower()
-    
-    # 1. Khong luu neu la cau hoi (tranh nham lan khi hoi: "ba thich gi nho khong?")
-    if text_clean.endswith("?") or text_clean.endswith("không") or text_clean.endswith("chưa"):
-        return False
-
-    # 2. Quet xem co chua tu khoa ghi nho khong
-    matched = any(kw in text_lower for kw in MEMORY_KEYWORDS)
-    if matched:
-        add_fact(text_clean)
-        return True
-    return False
 
 def get_last_interaction_time() -> datetime | None:
-    """Lay timestamp cua tin nhan cuoi cung tu conversation_log."""
     conn = _get_connection()
-    row = conn.execute(
-        "SELECT timestamp FROM conversation_log ORDER BY id DESC LIMIT 1"
-    ).fetchone()
+    row = conn.execute("SELECT timestamp FROM conversation_log ORDER BY id DESC LIMIT 1").fetchone()
     conn.close()
     if row and row[0]:
         try:
@@ -128,42 +136,63 @@ def get_last_interaction_time() -> datetime | None:
             return None
     return None
 
-EXTRACTION_PROMPT = """Phan tich cau noi sau cua Papa. Neu cau noi tiet lo bat ky so thich, thoi quen, lich trinh, cong viec hoac trang thai suc khoe lau dai cua Papa, hay rut gon thanh 1 cau ngan gon ro rang (vi du: 'Papa thich uong cafe den', 'Papa hay bi moi mat vi may tinh').
-Neu day chi la cau chao hoi, cau hoi xa giao, hoi gio giac hoac tro chuyen thong thuong khong co thong tin ca nhan can nho dai han, chi tra ve dung chu: NONE.
 
-Cau noi cua Papa: "{user_text}"
-Ket qua:"""
+EXTRACTION_PROMPT = """Phân tích câu nói sau của Papa. Nếu câu nói tiết lộ bất kỳ sở thích, thói quen, công việc, sức khỏe hoặc tình cảm cá nhân nào cần nhớ lâu dài, hãy tóm tắt thành 1 câu ngắn gọn (ví dụ: 'Papa thích uống cafe đen', 'Papa hay thức khuya').
+Nếu chỉ là câu chào hỏi, đùa vui xã giao, hỏi giờ giấc hoặc trò chuyện thông thường không có dữ liệu mới, chỉ trả về đúng chữ: NONE.
+
+Câu nói của Papa: "{user_text}"
+Kết quả:"""
 
 
 def _async_extract_fact(user_text: str, ai_router):
-    """Luong phu: Trich xuat fact chay ngam, khong lam cham luong chat chinh."""
     try:
         from .providers.base import ChatMessage
         prompt = EXTRACTION_PROMPT.format(user_text=user_text)
-
-        # Dung che do simple (re, nhanh, nhe) de trich xuat
         res = ai_router.generate_reply(
-            system_prompt="Ban la bo phan loai thong tin ngan gon. Chi tra ve 1 fact ngan hoac chu NONE.",
+            system_prompt="Bạn là bộ lọc trích xuất thông tin. Chỉ trả về 1 fact ngắn hoặc chữ NONE.",
             messages=[ChatMessage(role="user", content=prompt)],
             mode="simple",
         )
         fact = res.get("reply", "").strip()
-
-        # Neu nhan dien duoc thong tin va khong phai NONE
         if fact and "NONE" not in fact and len(fact) < 150:
             if add_fact(fact):
                 print(f"\n*(Yui đã âm thầm ghi nhớ: {fact})*")
     except Exception:
-        pass  # Luong phu khong duoc phep gay crash chuong trinh
+        pass
 
 
 def extract_fact_in_background(user_text: str, ai_router):
-    """Kich hoat thread chay tach biet."""
     thread = threading.Thread(
         target=_async_extract_fact,
         args=(user_text, ai_router),
         daemon=True,
     )
     thread.start()
+
+def get_last_session_context() -> str | None:
+    """
+    Lay tin nhan cuoi cung cua phien truoc (neu da cach hien tai tren 6 tieng)
+    de tao su lien ket mach hoi thoai tu nhien khi bat dau ngay moi.
+    """
+    conn = _get_connection()
+    # Lay tin nhan gan nhat cua user
+    row = conn.execute(
+        "SELECT timestamp, content FROM conversation_log WHERE role = 'user' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    conn.close()
+
+    if not row or not row[0]:
+        return None
+
+    try:
+        last_time = datetime.fromisoformat(row[0])
+        now = datetime.now()
+        # Neu cuoc tro chuyen cu cach hien tai it nhat 6 tieng (vi du: tu toi hom truoc toi sang nay)
+        if (now - last_time).total_seconds() >= 6 * 3600:
+            return row[1].strip()
+    except Exception:
+        return None
+
+    return None
 
 init_db()
