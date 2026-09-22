@@ -64,6 +64,11 @@ def _play_audio_blocking(file_path: str):
         if not pygame.mixer.get_init():
             pygame.mixer.init()
 
+        # Dừng và giải phóng file cũ nếu đang bận
+        if pygame.mixer.music.get_busy():
+            pygame.mixer.music.stop()
+        pygame.mixer.music.unload()
+
         pygame.mixer.music.load(file_path)
         pygame.mixer.music.play()
         while pygame.mixer.music.get_busy():

@@ -1,79 +1,67 @@
 import sys
 import logging
+import requests
 from datetime import datetime, timedelta
 
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QLineEdit,
-    QVBoxLayout, QHBoxLayout, QGraphicsDropShadowEffect
+    QVBoxLayout, QGraphicsDropShadowEffect
 )
 from PyQt6.QtGui import QPixmap, QColor
 from PyQt6.QtCore import Qt, QPoint, QThread, pyqtSignal, QTimer
 
-# Khóa log cảnh báo mạng để terminal sạch sẽ
 logging.basicConfig(level=logging.WARNING)
-for log_name in ["httpx", "httpx2", "google_genai", "httpcore"]:
-    logging.getLogger(log_name).setLevel(logging.WARNING)
 
+# Giữ lại module TTS cục bộ trên PC chính để phát âm thanh qua loa máy tính làm việc
 from backend.voice.tts import speak_japanese_async
-from backend.router import AIRouter
-from backend.providers.base import ChatMessage
-from backend.persona import SYSTEM_PROMPT
-from backend import memory
+
+# Địa chỉ Server não bộ của Yui trên PC phụ qua Tailscale
+SERVER_URL = "http://100.78.118.121:8000"
 
 
-# --- WORKER THREAD: XỬ LÝ CHAT KHÔNG GÂY ĐƠ GUI ---
+# --- WORKER THREAD: GỬI REQUEST HTTP SANG SERVER CHẠY NỀN ---
 class ChatWorker(QThread):
-    # Phát ra cả văn bản phản hồi và trạng thái cảm xúc (reply_text, mood)
     reply_ready = pyqtSignal(str, str)
 
-    def __init__(self, user_text: str, ai_router: AIRouter, is_trigger: bool = False):
+    def __init__(self, user_text: str, is_trigger: bool = False):
         super().__init__()
         self.user_text = user_text
-        self.ai_router = ai_router
         self.is_trigger = is_trigger
 
     def run(self):
-        if not self.is_trigger:
-            if hasattr(memory, "extract_fact_in_background"):
-                memory.extract_fact_in_background(self.user_text, self.ai_router)
-            history = memory.get_recent_history(limit=20)
-        else:
-            # Luồng trigger: Chỉ lấy lịch sử ngắn để không loãng ngữ cảnh
-            history = memory.get_recent_history(limit=3)
-
-        messages = history + [ChatMessage(role="user", content=self.user_text)]
-        system_prompt = memory.build_system_prompt_with_facts(SYSTEM_PROMPT)
-        result = self.ai_router.generate_reply(system_prompt=system_prompt, messages=messages)
-        
-        reply = result.get("reply", "")
-        cog_data = result.get("cognitive_data", {})
-        mood = cog_data.get("mood", "happy")
-
-        # Lưu lịch sử hội thoại
-        if not self.is_trigger:
-            memory.log_message("user", self.user_text)
-        memory.log_message("assistant", reply)
+        try:
+            # Gửi tin nhắn sang Server FastAPI trên PC phụ
+            res = requests.post(
+                f"{SERVER_URL}/chat",
+                json={
+                    "message": self.user_text,
+                    "mode": "simple"
+                },
+                timeout=40
+            )
+            if res.status_code == 200:
+                data = res.json()
+                reply = data.get("reply", "")
+                cog_data = data.get("cognitive_data", {})
+                mood = cog_data.get("mood", "happy")
+            else:
+                reply = "Server báo lỗi kết nối rồi ạ, Papa kiểm tra lại PC phụ nhé..."
+                mood = "worried"
+        except requests.exceptions.RequestException as e:
+            reply = f"Không kết nối được tới não bộ của Yui ({e})"
+            mood = "worried"
 
         self.reply_ready.emit(reply, mood)
 
 
-# --- MAIN WIDGET: CỬA SỔ HIỆN DIỆN CỦA YUI ---
-class YuiWidget(QWidget):
-    def __init__(self, initial_text: str = None):
+# --- CỬA SỔ 1: BONG BÓNG THOẠI & Ô CHAT (NỞ HOÀN TOÀN SANG TRÁI) ---
+class ChatBubbleWindow(QWidget):
+    message_sent = pyqtSignal(str)
+
+    def __init__(self, parent_sprite):
         super().__init__()
-        self.ai_router = AIRouter()
-        self.drag_position = QPoint()
-        self.chat_worker = None
-        self.trigger_worker = None
-        self.initial_text = initial_text
-
-        # Trạng thái Trigger
-        self.triggered_scheduled_today = set()
-        self.current_date = datetime.now().date()
-        self.last_inactivity_trigger_time = None
-
+        self.parent_sprite = parent_sprite
         self.init_ui()
-        self.init_trigger_timer()
 
     def init_ui(self):
         self.setWindowFlags(
@@ -83,17 +71,10 @@ class YuiWidget(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
-        main_layout = QHBoxLayout(self)
-        main_layout.setContentsMargins(15, 15, 15, 15)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
 
-        # Cột trái: Bong bóng thoại + Ô nhập liệu
-        left_col = QVBoxLayout()
-
-        # Bong bóng thoại
-        default_bubble_text = "今日もお疲れ様でした、パパ！\n(Kyou mo otsukaresama deshita, papa!)\n-> Chào mừng papa quay trở lại ạ!"
-        display_text = self.initial_text if self.initial_text else default_bubble_text
-        
-        self.bubble = QLabel(display_text)
+        self.bubble = QLabel("今日もお疲れ様でした、パパ！\n(Kyou mo otsukaresama deshita, papa!)\n-> Chào mừng papa quay trở lại ạ!")
         self.bubble.setWordWrap(True)
         self.bubble.setFixedWidth(320)
         self.bubble.setStyleSheet("""
@@ -112,9 +93,8 @@ class YuiWidget(QWidget):
         shadow.setColor(QColor(0, 0, 0, 40))
         shadow.setOffset(2, 2)
         self.bubble.setGraphicsEffect(shadow)
-        left_col.addWidget(self.bubble)
+        layout.addWidget(self.bubble)
 
-        # Ô nhập liệu
         self.input_field = QLineEdit()
         self.input_field.setPlaceholderText("Nói chuyện với Yui...")
         self.input_field.setStyleSheet("""
@@ -130,12 +110,71 @@ class YuiWidget(QWidget):
                 border: 1.5px solid #8e44ad;
             }
         """)
-        self.input_field.returnPressed.connect(self.on_send_message)
-        left_col.addWidget(self.input_field)
+        self.input_field.returnPressed.connect(self.on_send)
+        layout.addWidget(self.input_field)
 
-        main_layout.addLayout(left_col)
+    def on_send(self):
+        text = self.input_field.text().strip()
+        if text:
+            self.message_sent.emit(text)
 
-        # Cột phải: Sprite Yui
+    def reposition_to_sprite(self):
+        """Tự động neo khung chat sang bên trái của Bé Yui."""
+        self.layout().activate()
+        self.adjustSize()
+        sprite_geom = self.parent_sprite.geometry()
+        new_x = sprite_geom.left() - self.width() + 10
+        new_y = sprite_geom.bottom() - self.height() + 5
+        self.move(new_x, new_y)
+
+
+# --- CỬA SỔ 2: BÉ YUI (SPRITE CHỦ ĐẠO - CỐ ĐỊNH TỌA ĐỘ) ---
+class YuiSpriteWindow(QWidget):
+    def __init__(self, initial_text: str = None):
+        super().__init__()
+        self.drag_position = QPoint()
+        self.chat_worker = None
+        self.trigger_worker = None
+        self.initial_text = initial_text
+
+        # Trạng thái Trigger
+        self.triggered_scheduled_today = set()
+        self.current_date = datetime.now().date()
+        self.last_interaction_time = datetime.now()
+
+        self.init_ui()
+        self.chat_window = ChatBubbleWindow(self)
+        self.chat_window.message_sent.connect(self.handle_user_message)
+
+        # Lời chào theo giờ ban đầu
+        display_text = self.initial_text if self.initial_text else self.get_time_based_greeting()
+        self.chat_window.bubble.setText(display_text)
+        
+        self.chat_window.show()
+        self.chat_window.reposition_to_sprite()
+
+        self.init_trigger_timer()
+
+    def get_time_based_greeting(self) -> str:
+        hour = datetime.now().hour
+        if 5 <= hour < 12:
+            return "おはようございます、パパ！\n(Ohayou gozaimasu, papa!)\n-> Chào buổi sáng Papa, chúc Papa một ngày tốt lành ạ!"
+        elif 12 <= hour < 18:
+            return "こんにちは、パパ！\n(Konnichiwa, papa!)\n-> Chào buổi chiều Papa, công việc vẫn suôn sẻ chứ ạ?"
+        else:
+            return "今日もお疲れ様でした、パパ！\n(Kyou mo otsukaresama deshita, papa!)\n-> Hôm nay Papa đã vất vả nhiều rồi, nghỉ ngơi thật tốt nhé!"
+
+    def init_ui(self):
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.SubWindow
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
         self.sprite_label = QLabel()
         pixmap = QPixmap("yui_nobg_profile.png")
         scaled_pixmap = pixmap.scaled(
@@ -144,14 +183,13 @@ class YuiWidget(QWidget):
             Qt.TransformationMode.SmoothTransformation
         )
         self.sprite_label.setPixmap(scaled_pixmap)
-        main_layout.addWidget(self.sprite_label)
+        layout.addWidget(self.sprite_label)
 
         # Căn vị trí góc dưới bên phải màn hình
         screen = QApplication.primaryScreen().availableGeometry()
         self.adjustSize()
-        self.move(screen.width() - self.width() - 30, screen.height() - self.height() - 40)
+        self.move(screen.width() - self.width() - 20, screen.height() - self.height() - 40)
 
-    # --- KÉO THẢ DI CHUYỂN BẰNG CHUỘT ---
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
@@ -160,17 +198,23 @@ class YuiWidget(QWidget):
     def mouseMoveEvent(self, event):
         if event.buttons() == Qt.MouseButton.LeftButton:
             self.move(event.globalPosition().toPoint() - self.drag_position)
+            self.chat_window.reposition_to_sprite()
+            event.accept()
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self.chat_window.isVisible():
+                self.chat_window.hide()
+            else:
+                self.chat_window.show()
+                self.chat_window.reposition_to_sprite()
             event.accept()
 
     # --- LUỒNG CHAT TƯƠNG TÁC ---
-    def on_send_message(self):
-        text = self.input_field.text().strip()
-        if not text:
-            return
+    def handle_user_message(self, text: str):
+        self.chat_window.input_field.clear()
+        self.last_interaction_time = datetime.now()
 
-        self.input_field.clear()
-
-        # 1. Kiểm tra từ khóa thoát / tạm biệt
         exit_keywords = [
             "thoat", "thoát", "tạm biệt", "tam biet", "bye", "goodbye",
             "tạm biệt con gái", "tam biet con gai", "bye yui", "goodbye yui",
@@ -178,85 +222,60 @@ class YuiWidget(QWidget):
             "goodbye con gái", "goodbye con gai"
         ]
         if text.lower() in exit_keywords:
-            self.input_field.setEnabled(False)
+            self.chat_window.input_field.setEnabled(False)
             bye_msg = "また会いましょうね、パパ！\n(Mata aimashou ne, papa!)\n-> Hẹn gặp lại Papa sau nhé!"
-            self.bubble.setText(bye_msg)
-            self.update_bubble_geometry()
+            self.chat_window.bubble.setText(bye_msg)
+            self.chat_window.reposition_to_sprite()
             
-            # Yui nói câu chào tạm biệt bằng âm sắc dịu dàng
             speak_japanese_async(bye_msg, mood="caring")
-            
-            # Đợi 2.5 giây cho Yui nói xong rồi tự thoát
-            QTimer.singleShot(2500, self.close)
+            QTimer.singleShot(2500, QApplication.instance().quit)
             return
 
-        # 2. Luồng chat thông thường
-        self.input_field.setEnabled(False)
-        self.bubble.setText("...\n(Dang suy nghi...)")
+        self.chat_window.input_field.setEnabled(False)
+        self.chat_window.bubble.setText("...\n(Đang suy nghĩ...)")
+        self.chat_window.reposition_to_sprite()
 
-        self.chat_worker = ChatWorker(text, self.ai_router, is_trigger=False)
+        # Gọi sang Server PC phụ
+        self.chat_worker = ChatWorker(text, is_trigger=False)
         self.chat_worker.reply_ready.connect(self.on_reply_received)
         self.chat_worker.start()
 
     def on_reply_received(self, reply_text: str, mood: str):
-        self.bubble.setText(reply_text)
-        self.input_field.setEnabled(True)
-        self.input_field.setFocus()
-        self.update_bubble_geometry()
+        if not self.chat_window.isVisible():
+            self.chat_window.show()
 
-        # Phát giọng nói tiếng Nhật co giãn theo cảm xúc (Edge-TTS)
+        self.chat_window.bubble.setText(reply_text)
+        self.chat_window.input_field.setEnabled(True)
+        self.chat_window.input_field.setFocus()
+        self.chat_window.reposition_to_sprite()
+
+        # Phát giọng nói tiếng Nhật theo mood trả về
         speak_japanese_async(reply_text, mood=mood)
 
-    def update_bubble_geometry(self):
-        """Tự động tính toán lại kích thước và giữ cố định vị trí mép dưới của widget."""
-        old_bottom = self.geometry().bottom()
-        old_right = self.geometry().right()
-
-        self.layout().activate()
-        self.adjustSize()
-
-        new_height = self.height()
-        new_width = self.width()
-        self.move(old_right - new_width, old_bottom - new_height)
-        self.update()
-
-    # --- QUẢN LÝ TRIGGER TỰ ĐỘNG ---
+    # --- QUẢN LÝ TRIGGER ---
     def init_trigger_timer(self):
         self.trigger_timer = QTimer(self)
         self.trigger_timer.timeout.connect(self.check_triggers)
-        self.trigger_timer.start(30000)  # Rà soát mỗi 30 giây
+        self.trigger_timer.start(30000)
 
     def check_triggers(self):
             now = datetime.now()
+            is_weekend = now.weekday() in (5, 6)
 
-            # Reset cờ theo ngày mới
             if now.date() != self.current_date:
                 self.triggered_scheduled_today.clear()
                 self.current_date = now.date()
 
-            # 1. Hẹn giờ cố định (Đã nâng cấp Context Continuity cho buổi sáng)
-            last_context = memory.get_last_session_context() if hasattr(memory, "get_last_session_context") else None
-            context_hint = f" (Ngữ cảnh tối hôm trước Papa từng nói: '{last_context}'). Hãy hỏi thăm tiếp mạch nếu phù hợp." if last_context else ""
+            if is_weekend:
+                afternoon_desc = "Bây giờ là 5h chiều cuối tuần, hãy hỏi thăm xem Papa đã có một ngày nghỉ ngơi hoặc đi chơi thế nào rồi."
+            else:
+                afternoon_desc = "Bây giờ là 5h chiều tan sở, hãy chúc mừng Papa đã kết thúc một ngày làm việc vất vả và nhắc Papa thả lỏng thư giãn."
 
             scheduled_events = [
-                {
-                    "hour": 8, 
-                    "minute": 0, 
-                    "name": "morning_greeting", 
-                    "desc": f"Bây giờ là buổi sáng, hãy chủ động chào Papa và chúc Papa một ngày tốt lành.{context_hint}"
-                },
-                {
-                    "hour": 14, 
-                    "minute": 0, 
-                    "name": "afternoon_checkin", 
-                    "desc": "Bây giờ là buổi chiều, hãy chủ động hỏi thăm xem công việc của Papa thế nào."
-                },
-                {
-                    "hour": 21, 
-                    "minute": 0, 
-                    "name": "evening_checkin", 
-                    "desc": "Bây giờ là buổi tối, hãy nhắc Papa nghỉ ngơi thật tốt nhé."
-                }
+                {"hour": 8, "minute": 0, "name": "morning_8h", "desc": "Bây giờ là 8h sáng, hãy chủ động chào buổi sáng và chúc Papa một ngày tràn đầy năng lượng."},
+                {"hour": 17, "minute": 0, "name": "work_end_17h", "desc": afternoon_desc},
+                {"hour": 19, "minute": 0, "name": "dinner_20h", "desc": "Bây giờ là 8h tối, hãy nhắc Papa ăn tối đàng hoàng và đừng mải làm việc mà bỏ bữa đấy nhé."},
+                {"hour": 23, "minute": 0, "name": "bedtime_23h", "desc": "Bây giờ là 11h đêm, hãy nhắc Papa thư giãn giải trí một chút rồi đi ngủ sớm để giữ gìn sức khỏe."}
             ]
             for ev in scheduled_events:
                 if now.hour == ev["hour"] and now.minute == ev["minute"]:
@@ -265,41 +284,31 @@ class YuiWidget(QWidget):
                         self.execute_trigger(ev["desc"])
                         return
 
-            # 2. Kiểm tra nhàn rỗi (8h - 21h, sau 4 tiếng)
-            if 8 <= now.hour < 21:
-                if hasattr(memory, "get_last_interaction_time"):
-                    last_time = memory.get_last_interaction_time()
-                    if last_time:
-                        if self.last_inactivity_trigger_time is None or (now - self.last_inactivity_trigger_time >= timedelta(hours=4)):
-                            if now - last_time >= timedelta(hours=4):
-                                self.last_inactivity_trigger_time = now
-                                self.execute_trigger("Đã khá lâu Papa không nhắn tin trò chuyện, hãy chủ động hỏi thăm Papa xem có đang bận hay mệt mỏi không.")
+            # Nhàn rỗi sau 4 tiếng (khung giờ hoạt động 8h - 23h)
+            if 8 <= now.hour < 23:
+                if now - self.last_interaction_time >= timedelta(hours=4):
+                    self.last_interaction_time = now
+                    self.execute_trigger("Đã khá lâu Papa không nhắn tin trò chuyện, hãy chủ động hỏi thăm Papa xem có đang bận hay mệt mỏi không.")
 
     def execute_trigger(self, context_desc: str):
         prompt = f"[NGU CANH TU DONG]: {context_desc}"
-        
-        self.trigger_worker = ChatWorker(prompt, self.ai_router, is_trigger=True)
+        self.trigger_worker = ChatWorker(prompt, is_trigger=True)
         self.trigger_worker.reply_ready.connect(self.on_trigger_replied)
         self.trigger_worker.start()
 
     def on_trigger_replied(self, reply_text: str, mood: str):
         if reply_text:
-            self.bubble.setText(reply_text)
-            self.update_bubble_geometry()
+            if not self.chat_window.isVisible():
+                self.chat_window.show()
+
+            self.chat_window.bubble.setText(reply_text)
+            self.chat_window.reposition_to_sprite()
             speak_japanese_async(reply_text, mood=mood)
 
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    
-    # Lấy text truyền từ notification nếu có
     passed_text = sys.argv[1] if len(sys.argv) > 1 else None
-    
-    widget = YuiWidget(initial_text=passed_text)
-    widget.show()
-    
-    # Nếu có text truyền vào, ép cập nhật kích thước bong bóng cho vừa vặn
-    if passed_text:
-        widget.update_bubble_geometry()
-        
+    yui_sprite = YuiSpriteWindow(initial_text=passed_text)
+    yui_sprite.show()
     sys.exit(app.exec())

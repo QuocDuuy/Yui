@@ -34,6 +34,22 @@ def init_db():
             created_at TEXT NOT NULL
         )
     """)
+
+
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS emotional_state (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            current_mood TEXT NOT NULL,
+            inertia_level INTEGER NOT NULL,
+            last_reason TEXT,
+            updated_at TEXT NOT NULL
+        )
+    """)
+
+    conn.execute("""
+        INSERT OR IGNORE INTO emotional_state (id, current_mood, inertia_level, last_updated, updated_at)
+        VALUES (1, 'happy', 0, 'Khởi tạo hệ thống', datetime('now'))
+    """)
     conn.commit()
     conn.close()
 
@@ -116,13 +132,23 @@ def build_system_prompt_with_facts(base_persona: str, current_query: Optional[st
     now_str = datetime.now().strftime("%A, %d/%m/%Y %H:%M")
     time_block = f"[THÔNG TIN THỜI GIAN THỰC]: {now_str}"
 
+    # Lấy trạng thái tâm trạng có quán tính
+    mood_state = get_current_mood_state()
+    mood_block = (
+        f"[TRẠNG THÁI TÂM LÝ NỘI TÂM CỦA YUI]:\n"
+        f"- Tâm trạng hiện tại: {mood_state['mood'].upper()}\n"
+        f"- Mức độ quán tính cảm xúc: còn {mood_state['inertia']} lượt đối thoại giữ tâm trạng này."
+    )
+
+
     facts = get_relevant_facts(current_query)
+    facts_block = ""
     if facts:
         facts_list = "\n".join(f"- {f}" for f in facts)
-        facts_block = f"[KÝ ỨC CỦA YUI VỀ PAPA (CHỌN LỌC ĐỘNG)]:\n{facts_list}"
+        facts_block = f"\n\n[KÝ ỨC CỦA YUI VỀ PAPA (CHỌN LỌC ĐỘNG)]:\n{facts_list}"
         return f"{base_persona}\n\n{time_block}\n\n{facts_block}"
 
-    return f"{base_persona}\n\n{time_block}"
+    return f"{base_persona}\n\n{time_block}\n\n{mood_block}{facts_block}"
 
 
 def get_last_interaction_time() -> datetime | None:
@@ -135,6 +161,64 @@ def get_last_interaction_time() -> datetime | None:
         except Exception:
             return None
     return None
+
+def get_current_mood_state() -> dict:
+    """Lấy tâm trạng hiện tại và số lượt còn duy trì quán tính cảm xúc."""
+    conn = _get_connection()
+    row = conn.execute(
+        "SELECT current_mood, inertia_level, last_reason FROM emotional_state WHERE id = 1"
+    ).fetchone()
+    conn.close()
+    if row:
+        return {"mood": row[0], "inertia": row[1], "reason": row[2]}
+    return {"mood": "happy", "inertia": 0, "reason": ""}
+
+
+def get_current_emotional_state() -> dict:
+    """Lấy tâm trạng hiện tại và số lượt còn duy trì quán tính cảm xúc."""
+    conn = _get_connection()
+    row = conn.execute("SELECT current_mood, inertia, last_reason FROM emotional_state WHERE id = 1").fetchone()
+    conn.close()
+    if row:
+        return {
+            "current_mood": row[0],
+            "inertia": row[1],
+            "reason": row[2],
+        }
+    return {"mood": "happy", "inertia": 0, "reason": ""}
+
+def update_emotional_state(new_mood: str, reason: str):
+    """
+    Cập nhật tâm trạng mới. Nếu rơi vào trạng thái dỗi (pouting) hoặc lo lắng (worried),
+    duy trì quán tính trong ít nhất 2 lượt trò chuyện tiếp theo.
+    """
+    state = get_current_emotional_state()
+    current_mood = state["current_mood"]
+    inertia = state["inertia"]
+
+    # Nếu đang trong trạng thái dỗi/lo lắng và còn quán tính (> 0)
+    # mà câu mới chưa có tác động mạnh, tiếp tục duy trì trạng thái cũ
+
+    if inertia > 0 and new_mood == "happy" and current_mood in ("pouting", "worried"):
+        inertia -= 1
+        final_mood = current_mood  # Giữ nguyên tâm trạng cũ
+    else:
+        # Nếu vừa chuyển sang dỗi/lo lắng, thiết lập quán tính 2 lượt chat
+        if new_mood in ("pouting","worried"):
+            inertia = 2  # Duy trì quán tính trong 2 lượt tiếp theo
+        else:
+            inertia = 0  # Reset quán tính nếu tâm trạng bình thường
+        final_mood = new_mood
+
+    conn = _get_connection()
+    conn.execute("""
+        UPDATE emotional_state 
+        SET current_mood = ?, inertia_level = ?, last_reason = ?, updated_at = ?
+        WHERE id = 1
+    """, (final_mood, inertia, reason, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+    return final_mood
 
 
 EXTRACTION_PROMPT = """Phân tích câu nói sau của Papa. Nếu câu nói tiết lộ bất kỳ sở thích, thói quen, công việc, sức khỏe hoặc tình cảm cá nhân nào cần nhớ lâu dài, hãy tóm tắt thành 1 câu ngắn gọn (ví dụ: 'Papa thích uống cafe đen', 'Papa hay thức khuya').

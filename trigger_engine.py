@@ -141,7 +141,7 @@ def check_inactivity_trigger(now: datetime):
             title="Yui nhớ Papa quá à...!"
         )
 
-
+    
 def run():
     print("=" * 60)
     print("  YUI HEADLESS BACKGROUND SERVICE (CLICK-TO-WIDGET ENABLED)")
