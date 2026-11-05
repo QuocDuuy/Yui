@@ -18,7 +18,6 @@ from backend.voice.tts import speak_japanese_async
 # Địa chỉ Server não bộ của Yui trên PC phụ qua Tailscale
 SERVER_URL = "http://100.78.118.121:8000"
 
-
 # --- WORKER THREAD: GỬI REQUEST HTTP SANG SERVER CHẠY NỀN ---
 class ChatWorker(QThread):
     reply_ready = pyqtSignal(str, str)
