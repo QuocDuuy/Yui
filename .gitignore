@@ -12,3 +12,9 @@ __pycache__/
 *.db
 *.sqlite3
 yui.db
+
+# mp3 files
+*.mp3
+
+# Thư mục tạm thời
+temp_files/

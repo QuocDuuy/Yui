@@ -15,3 +15,7 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
 # DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
+
+ENABLE_PROVIDERS = [
+    p.strip() for p in os.environ.get("ENABLE_PROVIDERS", "gemini").split(",") if p.strip()
+]

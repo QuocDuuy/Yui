@@ -15,8 +15,7 @@ from .providers.base import (
     ProviderRateLimitError,
     ProviderUnavailableError
 )
-from .providers.gemini_provider import GeminiProvider
-from .providers.groq_provider import GroqProvider
+from . import config
 
 logger = logging.getLogger("ai_router")
 
@@ -118,8 +117,10 @@ class AIRouter:
     def _get_provider(self, name: str) -> AIProvider:
         if name not in self._providers:
             if name == "gemini":
+                from .providers.gemini_provider import GeminiProvider
                 self._providers[name] = GeminiProvider()
             elif name == "groq":
+                from .providers.groq_provider import GroqProvider
                 self._providers[name] = GroqProvider()
             else:
                 raise ValueError(f"Provider khong ton tai: {name}")
@@ -127,7 +128,7 @@ class AIRouter:
 
     def _fallback_chain(self, task_type: str) -> List[str]:
         # Ưu tiên Gemini -> Groq
-        return ["gemini", "groq"]
+        return list(config.ENABLE_PROVIDERS)
 
     def generate_reply(self, system_prompt: str, messages: list, mode: str = "simple") -> dict:
         last_error = None
@@ -158,13 +159,16 @@ class AIRouter:
             )
             return {
                 "reply": formatted_reply,
-                "cognitive_data": RATE_LIMIT_FALLBACK
+                # "cognitive_data": RATE_LIMIT_FALLBACK
+                "congnitive_data": RATE_LIMIT_FALLBACK,
+                "is_fallback": True,
             }
 
         # Các lỗi không xác định khác (mạng rớt, timeout...)
         logger.error(f"Tat ca provider deu loi cho mode='{mode}'. Loi cuoi: {last_error}")
         return {
             "reply": "パパ、少し通信が不安定みたいです…\n(Papa, sukoshi tsuushin ga fuantei mitai desu...)\n-> Papa ơi, kết nối mạng có vẻ hơi chập chờn một chút ạ...",
+            "is_fallback": True,
             "cognitive_data": {
                 "mood": "worried",
                 "japanese": "パパ、少し通信が不安定みたいです…",

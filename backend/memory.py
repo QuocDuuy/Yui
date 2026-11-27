@@ -37,7 +37,7 @@ def init_db():
 
 
     conn.execute("""
-        CREATE INDEX IF NOT EXISTS emotional_state (
+        CREATE TABLE IF NOT EXISTS emotional_state (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             current_mood TEXT NOT NULL,
             inertia_level INTEGER NOT NULL,
@@ -47,7 +47,7 @@ def init_db():
     """)
 
     conn.execute("""
-        INSERT OR IGNORE INTO emotional_state (id, current_mood, inertia_level, last_updated, updated_at)
+        INSERT OR IGNORE INTO emotional_state (id, current_mood, inertia_level, last_reason, updated_at)
         VALUES (1, 'happy', 0, 'Khởi tạo hệ thống', datetime('now'))
     """)
     conn.commit()
@@ -81,12 +81,12 @@ def add_fact(content: str) -> bool:
         return False
     conn = _get_connection()
     try:
-        conn.execute(
+        cursor = conn.execute(
             "INSERT OR IGNORE INTO user_facts (content, created_at) VALUES (?, ?)",
             (content, datetime.now().isoformat()),
         )
         conn.commit()
-        return True
+        return cursor.rowcount > 0
     finally:
         conn.close()
 
@@ -146,7 +146,6 @@ def build_system_prompt_with_facts(base_persona: str, current_query: Optional[st
     if facts:
         facts_list = "\n".join(f"- {f}" for f in facts)
         facts_block = f"\n\n[KÝ ỨC CỦA YUI VỀ PAPA (CHỌN LỌC ĐỘNG)]:\n{facts_list}"
-        return f"{base_persona}\n\n{time_block}\n\n{facts_block}"
 
     return f"{base_persona}\n\n{time_block}\n\n{mood_block}{facts_block}"
 
@@ -192,8 +191,8 @@ def update_emotional_state(new_mood: str, reason: str):
     Cập nhật tâm trạng mới. Nếu rơi vào trạng thái dỗi (pouting) hoặc lo lắng (worried),
     duy trì quán tính trong ít nhất 2 lượt trò chuyện tiếp theo.
     """
-    state = get_current_emotional_state()
-    current_mood = state["current_mood"]
+    state = get_current_mood_state()
+    current_mood = state["mood"]
     inertia = state["inertia"]
 
     # Nếu đang trong trạng thái dỗi/lo lắng và còn quán tính (> 0)
@@ -278,5 +277,3 @@ def get_last_session_context() -> str | None:
         return None
 
     return None
-
-init_db()

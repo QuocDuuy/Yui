@@ -1,47 +1,36 @@
 """
-Chat CLI - noi chuyen truc tiep voi Yui qua terminal, dung de test memory.
-Chay: python chat.py
-Go "thoat" de dung. Go "nho: <dieu can nho>" de luu 1 fact lau dai.
+Chat CLI - noi chuyen voi Yui qua terminal, dung chung luong xu ly voi server.
+Chay: python chat.py   |   Go "thoat" de dung.
 """
 import logging
+
 logging.basicConfig(level=logging.WARNING)
 for name in ["httpx", "httpx2", "google_genai", "httpcore"]:
     logging.getLogger(name).setLevel(logging.WARNING)
 
-
-from backend.router import AIRouter
-from backend.providers.base import ChatMessage
-from backend.persona import SYSTEM_PROMPT
 from backend import memory
+from backend.chat_service import handle_chat
+from backend.router import AIRouter
 
-ai_router = AIRouter()
 
-print("Yui da san sang. Go 'thoat' de dung.\n")
+def main():
+    memory.init_db()
+    ai_router = AIRouter()
+    print("Yui da san sang. Go 'thoat' de dung.\n")
 
-while True:
-    user_input = input("Ban: ").strip()
+    while True:
+        try:
+            user_input = input("Ban: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            break
+        if not user_input:
+            continue
+        if user_input.lower() == "thoat":
+            break
 
-    if not user_input:
-        continue
+        result = handle_chat(ai_router, user_input)
+        print(f"Yui: {result['reply']}\n")
 
-    if user_input.lower() == "thoat":
-        break
 
-    # 1. kich hoat phan tich trich xuat fact chay ngam cho Yui (0 delay cho Yui)
-    memory.extract_fact_in_background(user_input, ai_router)
-
-    # # Tu dong bat va luu fact neu chua tu khoa (Khong can go 'nho:' nua)
-    # if memory.check_and_extract_fact(user_input):
-    #     print(f"*(Yui da lang nghe va ghi nho vao ky uc)*")
-
-    # Tiep tuc luong hoi thoai binh thuong ma khong bi dung lai
-    history = memory.get_recent_history(limit=20)
-    messages = history + [ChatMessage(role="user", content=user_input)]
-    system_prompt = memory.build_system_prompt_with_facts(SYSTEM_PROMPT)
-
-    result = ai_router.generate_reply(system_prompt=system_prompt, messages=messages)
-    reply = result["reply"]
-    print(f"Yui: {reply}\n")
-
-    memory.log_message("user", user_input)
-    memory.log_message("assistant", reply)
+if __name__ == "__main__":
+    main()
