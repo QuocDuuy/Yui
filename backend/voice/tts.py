@@ -8,11 +8,14 @@ Module Voice Output (TTS) cho Giai đoạn Yui 2.0
 
 import asyncio
 import os
+import tempfile
 import threading
+import uuid
 import pygame
 
 YUI_VOICE = "ja-JP-NanamiNeural"
-AUDIO_OUTPUT_PATH = "yui_temp_voice.mp3"
+# Moi lan noi dung 1 file tam rieng (tranh ghi de khi 2 cau noi lien tiep)
+AUDIO_TEMP_DIR = os.path.join(tempfile.gettempdir(), "yui_voice")
 
 # Bản đồ âm sắc chuẩn theo giọng anime của Yui (Itou Kanae)
 MOOD_CONFIG = {
@@ -84,11 +87,21 @@ def speak_japanese_sync(reply_text: str, mood: str = "happy"):
     if not jp_text:
         return
 
+    audio_path = None
     try:
-        asyncio.run(_generate_audio_file(jp_text, mood, AUDIO_OUTPUT_PATH))
-        _play_audio_blocking(AUDIO_OUTPUT_PATH)
+        os.makedirs(AUDIO_TEMP_DIR, exist_ok=True)
+        audio_path = os.path.join(AUDIO_TEMP_DIR, f"yui_{uuid.uuid4().hex}.mp3")
+        asyncio.run(_generate_audio_file(jp_text, mood, audio_path))
+        _play_audio_blocking(audio_path)
     except Exception as e:
         print(f"[Lỗi TTS Voice]: {e}")
+    finally:
+        # Don file tam; neu Windows con giu file (dang phat cau khac) thi bo qua
+        if audio_path and os.path.exists(audio_path):
+            try:
+                os.remove(audio_path)
+            except OSError:
+                pass
 
 
 def speak_japanese_async(reply_text: str, mood: str = "happy"):

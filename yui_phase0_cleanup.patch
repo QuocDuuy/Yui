@@ -1,0 +1,159 @@
+diff --git a/backend/memory.py b/backend/memory.py
+index 41e62fe..533ca40 100644
+--- a/backend/memory.py
++++ b/backend/memory.py
+@@ -174,17 +174,11 @@ def get_current_mood_state() -> dict:
+ 
+ 
+ def get_current_emotional_state() -> dict:
+-    """Lấy tâm trạng hiện tại và số lượt còn duy trì quán tính cảm xúc."""
+-    conn = _get_connection()
+-    row = conn.execute("SELECT current_mood, inertia, last_reason FROM emotional_state WHERE id = 1").fetchone()
+-    conn.close()
+-    if row:
+-        return {
+-            "current_mood": row[0],
+-            "inertia": row[1],
+-            "reason": row[2],
+-        }
+-    return {"mood": "happy", "inertia": 0, "reason": ""}
++    """
++    Giữ lại tên hàm cũ để tương thích. Trước đây truy vấn sai tên cột (inertia),
++    nay dùng chung get_current_mood_state() -> {"mood", "inertia", "reason"}.
++    """
++    return get_current_mood_state()
+ 
+ def update_emotional_state(new_mood: str, reason: str):
+     """
+diff --git a/backend/providers/deepseek_provider.py b/backend/providers/deepseek_provider.py
+index 7ed639f..768220c 100644
+--- a/backend/providers/deepseek_provider.py
++++ b/backend/providers/deepseek_provider.py
+@@ -23,13 +23,17 @@ class DeepSeekProvider(AIProvider):
+     name = "deepseek"
+ 
+     def __init__(self):
+-        if not config.DEEPSEEK_API_KEY:
+-            raise ProviderAuthError("Thieu DEEPSEEK_API_KEY trong bien moi truong.")
++        # DeepSeek hien dang TAT trong config.py (cac bien da comment), nen doc an toan
++        api_key = getattr(config, "DEEPSEEK_API_KEY", None)
++        if not api_key:
++            raise ProviderAuthError(
++                "DeepSeek dang tat: chua bat DEEPSEEK_API_KEY trong backend/config.py."
++            )
+         self.client = OpenAI(
+-            api_key=config.DEEPSEEK_API_KEY,
++            api_key=api_key,
+             base_url="https://api.deepseek.com",
+         )
+-        self.model_name = config.DEEPSEEK_MODEL
++        self.model_name = getattr(config, "DEEPSEEK_MODEL", "deepseek-v4-flash")
+ 
+     def generate(self, system_prompt: str, messages: List[ChatMessage]) -> str:
+         api_messages = [{"role": "system", "content": system_prompt}]
+diff --git a/backend/router.py b/backend/router.py
+index 01584eb..c001e71 100644
+--- a/backend/router.py
++++ b/backend/router.py
+@@ -159,8 +159,7 @@ class AIRouter:
+             )
+             return {
+                 "reply": formatted_reply,
+-                # "cognitive_data": RATE_LIMIT_FALLBACK
+-                "congnitive_data": RATE_LIMIT_FALLBACK,
++                "cognitive_data": RATE_LIMIT_FALLBACK,
+                 "is_fallback": True,
+             }
+ 
+diff --git a/backend/voice/tts.py b/backend/voice/tts.py
+index 702d345..e529154 100644
+--- a/backend/voice/tts.py
++++ b/backend/voice/tts.py
+@@ -8,11 +8,14 @@ Module Voice Output (TTS) cho Giai đoạn Yui 2.0
+ 
+ import asyncio
+ import os
++import tempfile
+ import threading
++import uuid
+ import pygame
+ 
+ YUI_VOICE = "ja-JP-NanamiNeural"
+-AUDIO_OUTPUT_PATH = "yui_temp_voice.mp3"
++# Moi lan noi dung 1 file tam rieng (tranh ghi de khi 2 cau noi lien tiep)
++AUDIO_TEMP_DIR = os.path.join(tempfile.gettempdir(), "yui_voice")
+ 
+ # Bản đồ âm sắc chuẩn theo giọng anime của Yui (Itou Kanae)
+ MOOD_CONFIG = {
+@@ -84,11 +87,21 @@ def speak_japanese_sync(reply_text: str, mood: str = "happy"):
+     if not jp_text:
+         return
+ 
++    audio_path = None
+     try:
+-        asyncio.run(_generate_audio_file(jp_text, mood, AUDIO_OUTPUT_PATH))
+-        _play_audio_blocking(AUDIO_OUTPUT_PATH)
++        os.makedirs(AUDIO_TEMP_DIR, exist_ok=True)
++        audio_path = os.path.join(AUDIO_TEMP_DIR, f"yui_{uuid.uuid4().hex}.mp3")
++        asyncio.run(_generate_audio_file(jp_text, mood, audio_path))
++        _play_audio_blocking(audio_path)
+     except Exception as e:
+         print(f"[Lỗi TTS Voice]: {e}")
++    finally:
++        # Don file tam; neu Windows con giu file (dang phat cau khac) thi bo qua
++        if audio_path and os.path.exists(audio_path):
++            try:
++                os.remove(audio_path)
++            except OSError:
++                pass
+ 
+ 
+ def speak_japanese_async(reply_text: str, mood: str = "happy"):
+diff --git a/test_providers.py b/test_providers.py
+index 08d9ea7..4d91cfa 100644
+--- a/test_providers.py
++++ b/test_providers.py
+@@ -1,22 +1,33 @@
++"""
++Test nhanh cac provider dang duoc bat trong ENABLE_PROVIDERS (file .env).
++Chay: python test_providers.py
++"""
++
++from backend import config
+ from backend.providers.base import ChatMessage
+ from backend.providers.gemini_provider import GeminiProvider
+-from backend.providers.deepseek_provider import DeepSeekProvider
+ from backend.providers.groq_provider import GroqProvider
+ 
+ SYSTEM_PROMPT = "Ban la mot tro ly AI. Tra loi ngan gon bang tieng Nhat, sau do ghi nghia tieng Viet."
+ TEST_MESSAGE = [ChatMessage(role="user", content="Xin chao")]
+ 
+-providers_to_test = {
+-    "Gemini": GeminiProvider,
+-    "DeepSeek": DeepSeekProvider,
+-    "Groq": GroqProvider,
++# DeepSeek dang tat (config.py da comment). Muon bat lai: mo comment trong config.py,
++# them DeepSeekProvider vao day va vao AIRouter._get_provider.
++AVAILABLE_PROVIDERS = {
++    "gemini": GeminiProvider,
++    "groq": GroqProvider,
+ }
+ 
+-for provider_name, provider_class in providers_to_test.items():
+-    print(f"\n--- Dang test {provider_name} ---")
++for name in config.ENABLE_PROVIDERS:
++    provider_class = AVAILABLE_PROVIDERS.get(name)
++    if provider_class is None:
++        print(f"\n--- Bo qua '{name}': khong co trong danh sach provider ho tro ---")
++        continue
++
++    print(f"\n--- Dang test {name} ---")
+     try:
+         provider = provider_class()
+         reply = provider.generate(SYSTEM_PROMPT, TEST_MESSAGE)
+-        print(f"[OK] {provider_name} tra loi:\n{reply}")
++        print(f"[OK] {name} tra loi:\n{reply}")
+     except Exception as e:
+-        print(f"[LOI] {provider_name} that bai: {e}")
+\ No newline at end of file
++        print(f"[LOI] {name} that bai: {e}")

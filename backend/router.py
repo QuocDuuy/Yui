@@ -159,8 +159,7 @@ class AIRouter:
             )
             return {
                 "reply": formatted_reply,
-                # "cognitive_data": RATE_LIMIT_FALLBACK
-                "congnitive_data": RATE_LIMIT_FALLBACK,
+                "cognitive_data": RATE_LIMIT_FALLBACK,
                 "is_fallback": True,
             }
 

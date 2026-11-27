@@ -174,17 +174,11 @@ def get_current_mood_state() -> dict:
 
 
 def get_current_emotional_state() -> dict:
-    """Lấy tâm trạng hiện tại và số lượt còn duy trì quán tính cảm xúc."""
-    conn = _get_connection()
-    row = conn.execute("SELECT current_mood, inertia, last_reason FROM emotional_state WHERE id = 1").fetchone()
-    conn.close()
-    if row:
-        return {
-            "current_mood": row[0],
-            "inertia": row[1],
-            "reason": row[2],
-        }
-    return {"mood": "happy", "inertia": 0, "reason": ""}
+    """
+    Giữ lại tên hàm cũ để tương thích. Trước đây truy vấn sai tên cột (inertia),
+    nay dùng chung get_current_mood_state() -> {"mood", "inertia", "reason"}.
+    """
+    return get_current_mood_state()
 
 def update_emotional_state(new_mood: str, reason: str):
     """

@@ -1,5 +1,6 @@
 import sys
 import logging
+import threading
 import requests
 from datetime import datetime, timedelta
 
@@ -14,11 +15,29 @@ logging.basicConfig(level=logging.WARNING)
 
 # Giữ lại module TTS cục bộ trên PC chính để phát âm thanh qua loa máy tính làm việc
 from backend.voice.tts import speak_japanese_async
+from backend import config, memory
+from backend.chat_services import handle_chat
+from backend.router import AIRouter
 
-# Địa chỉ Server não bộ của Yui trên PC phụ qua Tailscale
-SERVER_URL = "http://100.78.118.121:8000"
+# Chế độ chạy lấy từ .env: YUI_MODE=local (mặc định) hoặc server
+YUI_MODE = config.YUI_MODE
+SERVER_URL = config.YUI_SERVER_URL
 
-# --- WORKER THREAD: GỬI REQUEST HTTP SANG SERVER CHẠY NỀN ---
+# --- LOCAL MODE: dùng chung 1 AIRouter + khởi tạo DB đúng 1 lần ---
+_local_router = None
+_local_lock = threading.Lock()
+
+
+def _get_local_router():
+    global _local_router
+    with _local_lock:
+        if _local_router is None:
+            memory.init_db()
+            _local_router = AIRouter()
+        return _local_router
+
+
+# --- WORKER THREAD: xử lý chat nền (local hoặc qua server) ---
 class ChatWorker(QThread):
     reply_ready = pyqtSignal(str, str)
 
@@ -28,29 +47,43 @@ class ChatWorker(QThread):
         self.is_trigger = is_trigger
 
     def run(self):
+        if YUI_MODE == "server":
+            reply, mood = self._run_server()
+        else:
+            reply, mood = self._run_local()
+        self.reply_ready.emit(reply, mood)
+
+    def _run_local(self):
         try:
-            # Gửi tin nhắn sang Server FastAPI trên PC phụ
+            result = handle_chat(
+                _get_local_router(),
+                self.user_text,
+                is_trigger=self.is_trigger,
+            )
+            reply = result.get("reply", "")
+            cog_data = result.get("cognitive_data") or {}
+            mood = cog_data.get("mood", "happy")
+            return reply, mood
+        except Exception as e:
+            logging.exception("Local chat failed")
+            return f"Yui gặp lỗi khi xử lý ngay trên máy này ({e})", "worried"
+
+    def _run_server(self):
+        if not SERVER_URL:
+            return "Chưa cấu hình YUI_SERVER_URL trong file .env ạ.", "worried"
+        try:
             res = requests.post(
                 f"{SERVER_URL}/chat",
-                json={
-                    "message": self.user_text,
-                    "mode": "simple"
-                },
-                timeout=40
+                json={"message": self.user_text, "mode": "simple"},
+                timeout=40,
             )
             if res.status_code == 200:
                 data = res.json()
-                reply = data.get("reply", "")
                 cog_data = data.get("cognitive_data", {})
-                mood = cog_data.get("mood", "happy")
-            else:
-                reply = "Server báo lỗi kết nối rồi ạ, Papa kiểm tra lại PC phụ nhé..."
-                mood = "worried"
+                return data.get("reply", ""), cog_data.get("mood", "happy")
+            return "Server báo lỗi kết nối rồi ạ, Papa kiểm tra lại server nhé...", "worried"
         except requests.exceptions.RequestException as e:
-            reply = f"Không kết nối được tới não bộ của Yui ({e})"
-            mood = "worried"
-
-        self.reply_ready.emit(reply, mood)
+            return f"Không kết nối được tới não bộ của Yui ({e})", "worried"
 
 
 # --- CỬA SỔ 1: BONG BÓNG THOẠI & Ô CHAT (NỞ HOÀN TOÀN SANG TRÁI) ---

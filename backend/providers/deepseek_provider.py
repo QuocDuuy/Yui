@@ -23,13 +23,17 @@ class DeepSeekProvider(AIProvider):
     name = "deepseek"
 
     def __init__(self):
-        if not config.DEEPSEEK_API_KEY:
-            raise ProviderAuthError("Thieu DEEPSEEK_API_KEY trong bien moi truong.")
+        # DeepSeek hien dang TAT trong config.py (cac bien da comment), nen doc an toan
+        api_key = getattr(config, "DEEPSEEK_API_KEY", None)
+        if not api_key:
+            raise ProviderAuthError(
+                "DeepSeek dang tat: chua bat DEEPSEEK_API_KEY trong backend/config.py."
+            )
         self.client = OpenAI(
-            api_key=config.DEEPSEEK_API_KEY,
+            api_key=api_key,
             base_url="https://api.deepseek.com",
         )
-        self.model_name = config.DEEPSEEK_MODEL
+        self.model_name = getattr(config, "DEEPSEEK_MODEL", "deepseek-v4-flash")
 
     def generate(self, system_prompt: str, messages: List[ChatMessage]) -> str:
         api_messages = [{"role": "system", "content": system_prompt}]

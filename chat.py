@@ -9,7 +9,7 @@ for name in ["httpx", "httpx2", "google_genai", "httpcore"]:
     logging.getLogger(name).setLevel(logging.WARNING)
 
 from backend import memory
-from backend.chat_service import handle_chat
+from backend.chat_services import handle_chat
 from backend.router import AIRouter
 
 
